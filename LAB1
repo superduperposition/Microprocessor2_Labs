@@ -1,0 +1,486 @@
+#include <Keypad.h>
+
+// Shift register control pins for the 4-digit display
+const int shift_data_pin = 8;
+const int shift_latch_pin = 9;
+const int shift_clock_pin = 10;
+const int shift_enable_pin = 11;
+
+// Digit select pins for the 4-digit 7-segment display
+const int digit_select_pins[4] = {41, 42, 43, 44};
+
+// Segment patterns for 0-9, A, b, C, d, E, F, blank
+const byte segment_code_table[17] = {
+  0xFC,
+  0x60,
+  0xDA,
+  0xF2,
+  0x66,
+  0xB6,
+  0xBE,
+  0xE0,
+  0xFE,
+  0xF6,
+  0xEE,
+  0x3E,
+  0x9C,
+  0x7A,
+  0x9E,
+  0x8E,
+  0x00
+};
+
+// Symbol indexes used for letters and blank
+const byte symbol_A = 10;
+const byte symbol_b = 11;
+const byte symbol_blank = 16;
+
+// Digits currently shown on the display
+byte display_digits[4] = {symbol_blank, symbol_blank, symbol_blank, 0};
+
+// LED and buzzer pins
+const int main_red_pin = 22;
+const int main_yellow_pin = 23;
+const int main_green_pin = 24;
+const int cross_red_pin = 25;
+const int cross_yellow_pin = 26;
+const int cross_green_pin = 27;
+const int active_buzzer_pin = 28;
+
+// Keypad size
+const byte row_count = 4;
+const byte col_count = 4;
+
+// Keypad character layout
+char key_matrix[row_count][col_count] = {
+  {'1','2','3','A'},
+  {'4','5','6','B'},
+  {'7','8','9','C'},
+  {'*','0','#','D'}
+};
+
+// Working keypad pin mapping
+byte row_pin_vector[row_count] = {2, 3, 4, 5};
+byte col_pin_vector[col_count] = {6, 7, 12, 13};
+
+// Keypad object
+Keypad keypad_object = Keypad(makeKeymap(key_matrix), row_pin_vector, col_pin_vector, row_count, col_count);
+
+// Mode flags
+bool normal_mode_enabled = false;
+bool failure_mode_enabled = false;
+
+// User-set durations for red and green
+int red_duration_seconds = 0;
+int green_duration_seconds = 0;
+bool red_duration_set = false;
+bool green_duration_set = false;
+
+// Current keypad entry
+char input_channel = 0;
+char input_digits[6];
+byte input_digits_count = 0;
+
+// Display and half-second timing
+unsigned long last_refresh_time_us = 0;
+unsigned long last_half_second_time = 0;
+bool half_second_phase = false;
+
+// Used for detecting double-# to enter failure mode
+bool first_hash_detected = false;
+unsigned long first_hash_timestamp = 0;
+
+// Runtime phase identifiers
+const int phase_red_green = 0;
+const int phase_red_flash_yellow = 1;
+const int phase_green_red = 2;
+const int phase_yellow_red_flash = 3;
+
+// Sends one byte to the 74HC595
+void shift_register_write(byte segment_value) {
+  digitalWrite(shift_latch_pin, LOW);
+  shiftOut(shift_data_pin, shift_clock_pin, LSBFIRST, segment_value);
+  digitalWrite(shift_latch_pin, HIGH);
+}
+
+// Converts a number into 4 display digits
+void update_display_value(int display_value) {
+  if (display_value < 0) display_value = 0;
+  if (display_value > 9999) display_value = 9999;
+
+  int digit_0 = display_value / 1000;
+  int digit_1 = (display_value / 100) % 10;
+  int digit_2 = (display_value / 10) % 10;
+  int digit_3 = display_value % 10;
+
+  display_digits[0] = (digit_0 == 0) ? symbol_blank : digit_0;
+  display_digits[1] = (digit_0 == 0 && digit_1 == 0) ? symbol_blank : digit_1;
+  display_digits[2] = (digit_0 == 0 && digit_1 == 0 && digit_2 == 0) ? symbol_blank : digit_2;
+  display_digits[3] = digit_3;
+
+  if (display_value == 0) {
+    display_digits[0] = symbol_blank;
+    display_digits[1] = symbol_blank;
+    display_digits[2] = symbol_blank;
+    display_digits[3] = 0;
+  }
+}
+
+// Shows current config entry like A24 or b20
+void update_display_from_config_input() {
+  display_digits[0] = symbol_blank;
+  display_digits[1] = symbol_blank;
+  display_digits[2] = symbol_blank;
+  display_digits[3] = symbol_blank;
+
+  if (input_channel == 'A') display_digits[0] = symbol_A;
+  else if (input_channel == 'B') display_digits[0] = symbol_b;
+
+  if (input_digits_count >= 1) display_digits[1] = input_digits[0] - '0';
+  if (input_digits_count >= 2) display_digits[2] = input_digits[1] - '0';
+  if (input_digits_count >= 3) display_digits[3] = input_digits[2] - '0';
+}
+
+// Refreshes one display digit at a time for multiplexing
+void refresh_display_digits() {
+  static int current_digit_index = 0;
+
+  if (micros() - last_refresh_time_us < 2000) return;
+  last_refresh_time_us = micros();
+
+  for (int digit_index = 0; digit_index < 4; digit_index++) {
+    digitalWrite(digit_select_pins[digit_index], HIGH);
+  }
+
+  shift_register_write(segment_code_table[display_digits[current_digit_index]]);
+  digitalWrite(digit_select_pins[current_digit_index], LOW);
+
+  current_digit_index++;
+  if (current_digit_index > 3) current_digit_index = 0;
+}
+
+// Clears typed keypad digits
+void reset_input_digits() {
+  input_digits_count = 0;
+  input_digits[0] = '\0';
+}
+
+// Converts typed digit characters into an integer
+int convert_input_digits_to_number() {
+  int parsed_value = 0;
+  for (byte digit_index = 0; digit_index < input_digits_count; digit_index++) {
+    parsed_value = parsed_value * 10 + (input_digits[digit_index] - '0');
+  }
+  return parsed_value;
+}
+
+// Turns off all LEDs and buzzer
+void turn_everything_off() {
+  digitalWrite(main_red_pin, LOW);
+  digitalWrite(main_yellow_pin, LOW);
+  digitalWrite(main_green_pin, LOW);
+  digitalWrite(cross_red_pin, LOW);
+  digitalWrite(cross_yellow_pin, LOW);
+  digitalWrite(cross_green_pin, LOW);
+  digitalWrite(active_buzzer_pin, LOW);
+}
+
+// Updates the 0.5 second blink state
+void service_half_second_clock() {
+  unsigned long current_time = millis();
+  if (current_time - last_half_second_time >= 500) {
+    last_half_second_time += 500;
+    half_second_phase = !half_second_phase;
+  }
+}
+
+// Returns the 1-second blink state used in config mode
+bool config_flash_is_on() {
+  return ((millis() / 1000UL) % 2UL) == 0;
+}
+
+// Output pattern for default config mode
+void set_outputs_config_mode() {
+  turn_everything_off();
+  if (config_flash_is_on()) {
+    digitalWrite(main_red_pin, HIGH);
+    digitalWrite(cross_red_pin, HIGH);
+  }
+}
+
+// Output pattern for failure mode
+void set_outputs_failure_mode() {
+  turn_everything_off();
+  if (half_second_phase) {
+    digitalWrite(main_red_pin, HIGH);
+    digitalWrite(cross_red_pin, HIGH);
+  }
+}
+
+// Output patterns for each runtime traffic phase
+void set_outputs_for_runtime_phase(int phase_id, int countdown_value) {
+  turn_everything_off();
+
+  if (phase_id == phase_red_green) {
+    digitalWrite(main_red_pin, HIGH);
+
+    if (countdown_value > 3) {
+      digitalWrite(cross_green_pin, HIGH);
+    } else {
+      if (half_second_phase) digitalWrite(cross_green_pin, HIGH);
+      digitalWrite(active_buzzer_pin, HIGH);
+    }
+  } else if (phase_id == phase_red_flash_yellow) {
+    if (half_second_phase) digitalWrite(main_red_pin, HIGH);
+    digitalWrite(cross_yellow_pin, HIGH);
+    digitalWrite(active_buzzer_pin, HIGH);
+  } else if (phase_id == phase_green_red) {
+    digitalWrite(cross_red_pin, HIGH);
+
+    if (countdown_value > 3) {
+      digitalWrite(main_green_pin, HIGH);
+    } else {
+      if (half_second_phase) digitalWrite(main_green_pin, HIGH);
+      digitalWrite(active_buzzer_pin, HIGH);
+    }
+  } else if (phase_id == phase_yellow_red_flash) {
+    digitalWrite(main_yellow_pin, HIGH);
+    if (half_second_phase) digitalWrite(cross_red_pin, HIGH);
+    digitalWrite(active_buzzer_pin, HIGH);
+  }
+}
+
+// Handles keypad keys in config mode
+void service_config_key(char pressed_key) {
+  if (pressed_key == 'D') {
+    normal_mode_enabled = false;
+    failure_mode_enabled = false;
+    input_channel = 0;
+    reset_input_digits();
+    first_hash_detected = false;
+  } else if (pressed_key == 'C') {
+    input_channel = 0;
+    reset_input_digits();
+  } else if (pressed_key == 'A' || pressed_key == 'B') {
+    input_channel = pressed_key;
+    reset_input_digits();
+  } else if (pressed_key >= '0' && pressed_key <= '9') {
+    if (input_channel && input_digits_count < 3) {
+      input_digits[input_digits_count++] = pressed_key;
+      input_digits[input_digits_count] = '\0';
+    }
+  } else if (pressed_key == '#') {
+    if (input_channel && input_digits_count > 0) {
+      int new_value = convert_input_digits_to_number();
+      if (new_value < 4) new_value = 4;
+
+      if (input_channel == 'A') {
+        red_duration_seconds = new_value;
+        red_duration_set = true;
+      } else if (input_channel == 'B') {
+        green_duration_seconds = new_value;
+        green_duration_set = true;
+      }
+
+      input_channel = 0;
+      reset_input_digits();
+    }
+  } else if (pressed_key == '*') {
+    if (red_duration_set && green_duration_set) {
+      normal_mode_enabled = true;
+      failure_mode_enabled = false;
+      input_channel = 0;
+      reset_input_digits();
+      first_hash_detected = false;
+      last_half_second_time = millis();
+      half_second_phase = false;
+    }
+  }
+}
+
+// Handles keypad keys in failure mode
+void service_failure_key(char pressed_key) {
+  if (pressed_key == 'D') {
+    failure_mode_enabled = false;
+    normal_mode_enabled = false;
+    input_channel = 0;
+    reset_input_digits();
+    first_hash_detected = false;
+  } else if (pressed_key == 'C') {
+    input_channel = 0;
+    reset_input_digits();
+  } else if (pressed_key == 'A' || pressed_key == 'B') {
+    failure_mode_enabled = false;
+    normal_mode_enabled = false;
+    input_channel = pressed_key;
+    reset_input_digits();
+    first_hash_detected = false;
+  }
+}
+
+// Handles keypad keys in normal mode
+void service_normal_key(char pressed_key) {
+  if (pressed_key == 'D') {
+    normal_mode_enabled = false;
+    failure_mode_enabled = false;
+    input_channel = 0;
+    reset_input_digits();
+    first_hash_detected = false;
+  } else if (pressed_key == '#') {
+    if (!first_hash_detected) {
+      first_hash_detected = true;
+      first_hash_timestamp = millis();
+    } else if (millis() - first_hash_timestamp <= 1500) {
+      failure_mode_enabled = true;
+      normal_mode_enabled = false;
+      first_hash_detected = false;
+      last_half_second_time = millis();
+      half_second_phase = false;
+    } else {
+      first_hash_detected = true;
+      first_hash_timestamp = millis();
+    }
+  } else {
+    first_hash_detected = false;
+  }
+}
+
+// Reads keypad and sends key to the correct handler
+void service_keypad() {
+  char pressed_key = keypad_object.getKey();
+
+  if (!pressed_key) return;
+
+  if (failure_mode_enabled) {
+    service_failure_key(pressed_key);
+  } else if (normal_mode_enabled) {
+    service_normal_key(pressed_key);
+  } else {
+    service_config_key(pressed_key);
+  }
+}
+
+// Waits one second while still refreshing display, blinking, and reading keypad
+bool wait_one_second_with_services(int phase_id, int countdown_value) {
+  unsigned long start_time = millis();
+
+  while (millis() - start_time < 1000) {
+    refresh_display_digits();
+    service_half_second_clock();
+    service_keypad();
+    set_outputs_for_runtime_phase(phase_id, countdown_value);
+
+    if (failure_mode_enabled) return false;
+    if (!normal_mode_enabled) return false;
+  }
+
+  return true;
+}
+
+// Runs the red/green phase for the user-set red duration
+bool run_red_green_phase() {
+  for (int countdown_value = red_duration_seconds; countdown_value >= 1; countdown_value--) {
+    update_display_value(countdown_value);
+    if (!wait_one_second_with_services(phase_red_green, countdown_value)) return false;
+  }
+  return true;
+}
+
+// Runs the red-flash / yellow phase for 3 seconds
+bool run_red_flash_yellow_phase() {
+  for (int countdown_value = 3; countdown_value >= 1; countdown_value--) {
+    update_display_value(countdown_value);
+    if (!wait_one_second_with_services(phase_red_flash_yellow, countdown_value)) return false;
+  }
+  return true;
+}
+
+// Runs the green/red phase for the user-set green duration
+bool run_green_red_phase() {
+  for (int countdown_value = green_duration_seconds; countdown_value >= 1; countdown_value--) {
+    update_display_value(countdown_value);
+    if (!wait_one_second_with_services(phase_green_red, countdown_value)) return false;
+  }
+  return true;
+}
+
+// Runs the yellow/red-flash phase for 3 seconds
+bool run_yellow_red_flash_phase() {
+  for (int countdown_value = 3; countdown_value >= 1; countdown_value--) {
+    update_display_value(countdown_value);
+    if (!wait_one_second_with_services(phase_yellow_red_flash, countdown_value)) return false;
+  }
+  return true;
+}
+
+// Config mode behavior
+void service_config_mode() {
+  service_keypad();
+  set_outputs_config_mode();
+
+  if (input_channel) update_display_from_config_input();
+  else update_display_value(0);
+}
+
+// Failure mode behavior
+void service_failure_mode() {
+  service_half_second_clock();
+  service_keypad();
+  set_outputs_failure_mode();
+  update_display_value(0);
+}
+
+// Normal operating sequence
+void service_normal_mode() {
+  if (!run_red_green_phase()) return;
+  if (!run_red_flash_yellow_phase()) return;
+  if (!run_green_red_phase()) return;
+  if (!run_yellow_red_flash_phase()) return;
+}
+
+// Sets all pins and startup state
+void setup() {
+  pinMode(shift_data_pin, OUTPUT);
+  pinMode(shift_latch_pin, OUTPUT);
+  pinMode(shift_clock_pin, OUTPUT);
+  pinMode(shift_enable_pin, OUTPUT);
+
+  digitalWrite(shift_enable_pin, HIGH);
+
+  for (int digit_index = 0; digit_index < 4; digit_index++) {
+    pinMode(digit_select_pins[digit_index], OUTPUT);
+    digitalWrite(digit_select_pins[digit_index], HIGH);
+  }
+
+  pinMode(main_red_pin, OUTPUT);
+  pinMode(main_yellow_pin, OUTPUT);
+  pinMode(main_green_pin, OUTPUT);
+  pinMode(cross_red_pin, OUTPUT);
+  pinMode(cross_yellow_pin, OUTPUT);
+  pinMode(cross_green_pin, OUTPUT);
+  pinMode(active_buzzer_pin, OUTPUT);
+
+  turn_everything_off();
+  update_display_value(0);
+
+  digitalWrite(shift_enable_pin, LOW);
+
+  last_half_second_time = millis();
+}
+
+// Main loop chooses config, normal, or failure mode
+void loop() {
+  refresh_display_digits();
+
+  if (failure_mode_enabled) {
+    service_failure_mode();
+  } else if (normal_mode_enabled) {
+    service_normal_mode();
+  } else {
+    service_config_mode();
+  }
+
+  if (first_hash_detected && (millis() - first_hash_timestamp > 1500)) {
+    first_hash_detected = false;
+  }
+}
