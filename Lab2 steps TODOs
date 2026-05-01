@@ -1,0 +1,102 @@
+
+
+********************************************************
+step3 TODO Angle accel
+
+-------------------ADD THIS BLOCK------------------------------------
+
+def accel_angles(ax: float, ay: float, az: float) -> tuple:
+    roll = math.atan2(ay, az)
+    pitch = math.atan2(-ax, math.sqrt((ay * ay) + (az * az)))
+    return math.degrees(roll), math.degrees(pitch)
+---------------------------------------------------------------------
+
+ REMOVE THIS LINE ->   raise NotImplementedError("TODO Step 3: implement accel_angles()")
+
+
+
+********************************************************
+step4 TODO Gyro integrate
+
+-------------------ADD THIS BLOCK------------------------------------
+        if not self._initialised:
+         self.roll = init_roll
+         self.pitch = init_pitch
+         self._prev_ts = ts
+         self._initialised = True
+         return self.roll, self.pitch
+
+        dt = ts - self._prev_ts
+        self._prev_ts = ts
+
+        if dt <= 0:
+         return self.roll, self.pitch
+
+        self.roll += gx * dt
+        self.pitch += gy * dt
+        return self.roll, self.pitch
+        
+
+------------------------------------------------------------------------
+
+REMOVE THIS LINE -> raise NotImplementedError("TODO Step 4: implement gyro integration")
+
+******************************************************************************************
+
+********************************************************
+step5 TODO  Filter
+
+-------------------ADD THIS BLOCK------------------------------------
+       a_roll, a_pitch = accel_angles(ax, ay, az)
+
+    if not self._initialised:
+        self.roll = a_roll
+        self.pitch = a_pitch
+        self._prev_ts = ts
+        self._initialised = True
+        return self.roll, self.pitch
+
+    dt = ts - self._prev_ts
+    self._prev_ts = ts
+
+    if dt <= 0:
+        return self.roll, self.pitch
+
+    self.roll = self.alpha * (self.roll + gx * dt) + (1.0 - self.alpha) * a_roll
+    self.pitch = self.alpha * (self.pitch + gy * dt) + (1.0 - self.alpha) * a_pitch
+    return self.roll, self.pitch
+        
+
+------------------------------------------------------------------------
+
+REMOVE THIS LINE -> raise NotImplementedError("TODO Step 5: implement complementary filter update")
+
+******************************************************************************************
+
+
+---------------------------------------------------------------------------------------------
+
+STEP 6 TO DO activity
+
+-----------------------------------ADD THIS BLOCK_________________________________
+  if len(devs) < max(STAT_WINDOW, SHAKE_COUNT):
+            return self.state
+
+        stat_devs = devs[-STAT_WINDOW:]
+        shake_devs = devs[-SHAKE_COUNT:]
+
+        if all(dev < THRESH_MOVING for dev in stat_devs):
+            return ActivityState.STATIONARY
+
+        shake_hits = sum(dev > THRESH_SHAKING for dev in shake_devs)
+        if shake_hits >= 2:
+            return ActivityState.SHAKING
+
+        return ActivityState.MOVING
+
+
+-------------------------------------------------------------------------------------------------------
+    REMOVE THIS LINE ->  raise NotImplementedError("TODO Step 6: implement _classify()")
+
+
+**************************************************************************************************************
