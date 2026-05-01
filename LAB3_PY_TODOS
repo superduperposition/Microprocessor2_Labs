@@ -1,0 +1,133 @@
+Lab3 Step3 TODO distance_to_pwm
+
+-------------------ADD THIS BLOCK------------------------------------
+
+def distance_to_pwm(distance_cm: float) -> int:
+    if distance_cm > 75.0:
+        return 255
+    elif distance_cm > 50.0:
+        return 191
+    elif distance_cm > 25.0:
+        return 128
+    else:
+        return 0
+
+REMOVE THIS LINE -> raise NotImplementedError(
+"TODO: map distance_cm to motor PWM (0–255). Closer = slower."
+)
+
+Lab3 Step4 TODO classify_alarm
+
+-------------------ADD THIS BLOCK------------------------------------
+
+def classify_alarm(distance_cm: float) -> int:
+    if distance_cm >= 60.0:
+        return 0
+    elif distance_cm >= 20.0:
+        return 1
+    else:
+        return 2
+
+REMOVE THE TODO PLACEHOLDER / NotImplementedError INSIDE classify_alarm()
+
+Lab3 Step5 TODO encode_frame
+
+-------------------ADD THIS BLOCK------------------------------------
+
+def encode_frame(
+    distance_cm: float,
+    motor_pwm: int,
+    alarm_state: int,
+    zone_id: int,
+) -> bytes:
+    distance_tenths = int(round(distance_cm * 10.0))
+
+    if distance_tenths < 0:
+        distance_tenths = 0
+    elif distance_tenths > 65535:
+        distance_tenths = 65535
+
+    dist_hi = (distance_tenths >> 8) & 0xFF
+    dist_lo = distance_tenths & 0xFF
+
+    checksum = dist_hi ^ dist_lo ^ motor_pwm ^ alarm_state ^ zone_id
+
+    return bytes([
+        FRAME_START,
+        dist_hi,
+        dist_lo,
+        motor_pwm & 0xFF,
+        alarm_state & 0xFF,
+        zone_id & 0xFF,
+        checksum & 0xFF,
+    ])
+
+REMOVE THE TODO PLACEHOLDER / NotImplementedError INSIDE encode_frame()
+
+Lab3 Step5 TODO decode_frame
+
+-------------------ADD THIS BLOCK------------------------------------
+
+def decode_frame(data: bytes) -> Optional[ParkingFrame]:
+    if len(data) != FRAME_LEN:
+        return None
+
+    if data[0] != FRAME_START:
+        return None
+
+    computed_checksum = 0
+    for byte in data[1:6]:
+        computed_checksum ^= byte
+
+    if computed_checksum != data[6]:
+        return None
+
+    distance_tenths = (data[1] << 8) | data[2]
+    distance_cm = distance_tenths / 10.0
+
+    return ParkingFrame(
+        distance_cm=distance_cm,
+        motor_pwm=data[3],
+        alarm_state=data[4],
+        zone_id=data[5],
+        timestamp=time.time(),
+    )
+
+REMOVE THE TODO PLACEHOLDER / NotImplementedError INSIDE decode_frame()
+
+Lab3 Step3 plot window fix step3_motor_map.py
+
+-------------------CHANGE THIS------------------------------------
+
+import matplotlib
+import matplotlib.pyplot as plt
+import numpy as np
+
+from sensor_reader import add_args, make_reader
+
+for _backend in (["MacOSX"] if sys.platform == "darwin" else []) + ["Qt5Agg", "TkAgg", "Agg"]:
+    try:
+        matplotlib.use(_backend)
+        break
+    except Exception:
+        pass
+
+-------------------TO THIS------------------------------------
+
+import matplotlib
+
+for _backend in (["MacOSX"] if sys.platform == "darwin" else []) + ["Qt5Agg", "TkAgg", "Agg"]:
+    try:
+        matplotlib.use(_backend)
+        break
+    except Exception:
+        pass
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+from sensor_reader import add_args, make_reader
+
+ADD THIS LINE INSIDE live_comparison() LOOP:
+
+plt.pause(0.001)
