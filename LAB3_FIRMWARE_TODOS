@@ -1,0 +1,89 @@
+********************************************************
+
+Lab3 Step1 TODO initPeripherals
+
+-------------------ADD THIS BLOCK------------------------------------
+
+```cpp
+void initPeripherals() {
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  digitalWrite(TRIG_PIN, LOW);
+
+  pinMode(ENA_PIN, OUTPUT);
+  pinMode(IN1_PIN, OUTPUT);
+  pinMode(IN2_PIN, OUTPUT);
+  digitalWrite(IN1_PIN, LOW);
+  digitalWrite(IN2_PIN, LOW);
+  analogWrite(ENA_PIN, 0);
+
+  pinMode(BUZZER_PIN, OUTPUT);
+  noTone(BUZZER_PIN);
+
+  lcd.begin(16, 2);
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Parking Sensor");
+  lcd.setCursor(0, 1);
+  lcd.print("Initializing");
+
+  lc.shutdown(0, false);
+  lc.setIntensity(0, 8);
+  lc.clearDisplay(0);
+}
+
+REMOVE THE TODO PLACEHOLDER BLOCK INSIDE initPeripherals()
+
+Lab3 Step1 TODO measureDistance
+
+-------------------ADD THIS BLOCK------------------------------------
+
+float measureDistance() {
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+
+  unsigned long pulse_duration = pulseIn(ECHO_PIN, HIGH, 30000UL);
+
+  if (pulse_duration == 0) {
+    return 0.0f;
+  }
+
+  float distance_cm = pulse_duration * 0.034f / 2.0f;
+  return distance_cm;
+}
+
+REMOVE THE TODO PLACEHOLDER BLOCK INSIDE measureDistance()
+
+Lab3 Step2 TODO updateMotor
+
+-------------------ADD THIS BLOCK------------------------------------
+
+void updateMotor(float dist) {
+  int zone = getZone(dist);
+  int pwm = getPWM(zone);
+
+  digitalWrite(IN1_PIN, HIGH);
+  digitalWrite(IN2_PIN, LOW);
+  analogWrite(ENA_PIN, pwm);
+}
+
+REMOVE THE TODO PLACEHOLDER BLOCK INSIDE updateMotor()
+
+Lab3 Step4 TODO updateBuzzer
+
+-------------------ADD THIS BLOCK------------------------------------
+
+void updateBuzzer(float dist) {
+  if (dist >= 60.0f) {
+    noTone(BUZZER_PIN);
+  } else if (dist >= 20.0f) {
+    int freq_hz = map((long)dist, 20L, 60L, 2000L, 500L);
+    tone(BUZZER_PIN, freq_hz);
+  } else {
+    tone(BUZZER_PIN, 2000);
+  }
+}
